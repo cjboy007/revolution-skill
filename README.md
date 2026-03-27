@@ -2,25 +2,45 @@
 
 **Let your AI agents build things while you sleep.**
 
-Revolution uses a single coordinator agent to drive an autonomous review → execute → audit loop. Define a goal, break it into subtasks, and the system iterates through them — spawning reviewer and executor sub-agents as needed, with built-in quality gates and self-healing.
+Revolution uses a coordinator agent to drive an autonomous review → execute → audit loop. Define a goal, break it into subtasks, and the system iterates through them — spawning specialized sub-agents for each role, with dual quality gates (pre-execution review + post-execution audit).
 
 ## How It Works
 
 ```
 Your coordinator agent (on a heartbeat timer)
     ↓
-Finds a pending task
+Finds a task needing work
     ↓
-Spawns a Reviewer sub-agent → audits plan, generates instructions
+┌─────────────────────────────────────────────┐
+│ Phase 1: Spawn Reviewer                     │
+│ - Audits the plan                           │
+│ - Generates detailed instructions           │
+│ - Decides: approve / revise                 │
+└─────────────────────────────────────────────┘
     ↓
-Spawns an Executor sub-agent → implements one subtask
+┌─────────────────────────────────────────────┐
+│ Phase 2: Spawn Executor                     │
+│ - Implements one subtask                    │
+│ - Runs verification tests                   │
+│ - Outputs results                           │
+└─────────────────────────────────────────────┘
     ↓
-Updates task → back to pending for next subtask
+┌─────────────────────────────────────────────┐
+│ Phase 3: Spawn Auditor                      │
+│ - Verifies instructions were followed       │
+│ - Checks acceptance criteria                │
+│ - Decides: pass / fail (retry)              │
+└─────────────────────────────────────────────┘
     ↓
 All subtasks done → completed → auto-packaged ✅
 ```
 
-Use a strong model for review (quality gate), a cheap model for execution (cost control). The coordinator itself can run on any model — it just orchestrates.
+**Why 3 sub-agent roles?**
+- **Reviewer** ensures the plan is sound (before work)
+- **Executor** does the actual work (follows instructions)
+- **Auditor** verifies the result matches the plan (after work)
+
+Use strong models for Reviewer and Auditor (judgment roles). Use cost-effective models for Executor (labor role).
 
 ## Requirements
 
@@ -62,9 +82,11 @@ cp skills/auto-evolution/references/task-example.json evolution/tasks/task-001.j
 ```markdown
 ## Evolution Loop
 1. Run `node skills/auto-evolution/scripts/heartbeat-coordinator.js`
-2. If pending task found → spawn reviewer sub-agent with the prompt
-3. Apply review → spawn executor sub-agent
-4. Apply result → done for this tick
+2. Parse output:
+   - phase=review → spawn Reviewer sub-agent → apply-review
+   - phase=execute → spawn Executor sub-agent → apply-exec
+   - phase=audit → spawn Auditor sub-agent → apply-audit
+3. Done for this tick
 ```
 
 **Option B: Cron**
@@ -90,12 +112,12 @@ node skills/auto-evolution/scripts/monitor.js
 │  (any model)     │
 └────────┬────────┘
          │ spawns
-    ┌────┴────┐
-    ▼         ▼
-┌────────┐ ┌────────┐
-│Reviewer│ │Executor│  ← Sub-agents, spawned on demand
-│(strong)│ │(cheap) │
-└────────┘ └────────┘
+    ┌────┴────┬──────────┐
+    ▼         ▼          ▼
+┌────────┐ ┌────────┐ ┌────────┐
+│Reviewer│ │Executor│ │Auditor │  ← Sub-agents, spawned on demand
+│(strong)│ │(cheap) │ │(strong)│
+└────────┘ └────────┘ └────────┘
 ```
 
 **Roles are filled by sub-agents, not specific agents.** You configure which model to use when spawning. The system doesn't care about agent names.
@@ -103,14 +125,14 @@ node skills/auto-evolution/scripts/monitor.js
 ## State Machine
 
 ```
-pending → reviewing → reviewed → executing → pending (loop)
-                                            → completed
-                                            → packaged ✅
+pending → reviewed → executing → pending (next subtask)
+                            → completed (all done)
+                            → packaged ✅
 ```
 
 - One subtask per heartbeat tick
 - Monitor auto-resets stuck tasks (>10 min)
-- Failed reviews trigger retry (up to `max_iterations`)
+- Failed audit triggers retry (up to `max_iterations`)
 
 ## File Structure
 
@@ -145,11 +167,11 @@ evolution/                   ← Runtime data (your workspace)
 
 ## Design Principles
 
-- **Coordinator-driven** — one agent, one loop, sub-agents spawned as needed
+- **4-role architecture** — Coordinator drives, 3 sub-agents specialize
+- **Dual quality gates** — Review before, audit after — never skip either
 - **Model-agnostic** — swap any model for any role
 - **One subtask per tick** — predictable, reviewable, won't timeout
 - **Self-healing** — monitor detects and fixes stuck states
-- **No quality shortcuts** — reviewer fails? Wait. Never skip the gate.
 - **Cost-efficient** — strong models only where judgment matters
 
 ## License
