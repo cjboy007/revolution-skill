@@ -1,6 +1,6 @@
 ---
 name: auto-evolution
-description: "Multi-agent auto-evolution system — orchestrate review, execute, audit loops across AI agents to autonomously complete complex tasks. Break goals into subtasks, auto-iterate with configurable roles (reviewer, executor, auditor, monitor), and auto-package results into skills. Use when: user wants autonomous multi-agent task execution, self-improving agent workflows, or automated code generation with review gates."
+description: "Multi-agent auto-evolution system — orchestrate review-execute-audit loops to autonomously complete complex tasks. A single coordinator agent drives the loop by spawning reviewer and executor sub-agents. Break goals into subtasks, auto-iterate with quality gates, and auto-package results. Use when: user wants autonomous task execution, self-improving agent workflows, or automated code generation with review gates."
 ---
 
 # auto-evolution
@@ -12,21 +12,20 @@ description: "Multi-agent auto-evolution system — orchestrate review, execute,
 
 ## Description
 
-**Multi-agent auto-evolution system** — orchestrate multiple AI agents to autonomously complete complex tasks through review-execute-audit loops.
+**Multi-agent auto-evolution system** — a single coordinator agent drives an autonomous review → execute → audit loop by spawning sub-agents for each role.
 
-This is a **meta-skill**: it doesn't handle business logic directly. Instead, it coordinates agents with different roles to break down goals into subtasks and iterate until completion.
+This is a **meta-skill**: it doesn't handle business logic. It orchestrates the loop so complex tasks get completed autonomously with built-in quality gates.
 
-### Roles
+### Architecture (2 Roles)
 
-| Role | Responsibility | Recommended Model |
-|------|---------------|-------------------|
-| **Designer** | Initial task design, phase planning | High-capability (e.g. Opus/o3) |
-| **Reviewer** | Pre-execution review, technical audit, generate instructions | Mid-tier (e.g. Sonnet/GPT-4o) |
-| **Executor** | Follow instructions, write code, run tests | Cost-effective (e.g. Qwen/Haiku) |
-| **Auditor** | Post-execution quality check | Mid-tier (e.g. Sonnet/GPT-4o) |
-| **Monitor** | Detect stuck tasks, clean locks, auto-reset | Cost-effective (e.g. Qwen/Haiku) |
+| Role | How It Works | Recommended Model |
+|------|-------------|-------------------|
+| **Coordinator** | Your main agent. Runs on a heartbeat/cron. Scans tasks, spawns sub-agents for review and execution. | Any (drives the loop) |
+| **Sub-agents** | Spawned on demand by the coordinator for specific roles (reviewer, executor, auditor). | Reviewer: strong model (Sonnet/GPT-4o). Executor: cost-effective (Qwen/Haiku). |
 
-Models are fully configurable — use whatever combination fits your budget and quality needs.
+**Optional:** A monitor script can run on a separate timer to detect stuck tasks and clean orphaned locks.
+
+**Cost control:** Only the reviewer/auditor sub-agents need a strong model. The coordinator and executor can use cheap models. Spawn-based — sub-agents only run when needed.
 
 ---
 
@@ -34,10 +33,9 @@ Models are fully configurable — use whatever combination fits your budget and 
 
 | File | Purpose |
 |------|---------|
-| `scripts/heartbeat-wilson.js` | Coordinator heartbeat: scan pending → spawn reviewer |
-| `scripts/heartbeat-iron.js` | Executor heartbeat: scan reviewed → execute subtask |
-| `scripts/heartbeat-warden.js` | Monitor heartbeat: detect stuck tasks → auto-reset |
-| `scripts/pack-skill.js` | Auto-package completed tasks → skill directories |
+| `scripts/heartbeat-coordinator.js` | Coordinator: scan pending → output review/execution prompts |
+| `scripts/monitor.js` | Monitor: detect stuck tasks → auto-reset, clean locks |
+| `scripts/pack-skill.js` | Package completed tasks → skill directories |
 | `config/task-schema.json` | Task file JSON Schema |
 
 ---
@@ -50,146 +48,102 @@ Models are fully configurable — use whatever combination fits your budget and 
 mkdir -p evolution/tasks evolution/archive evolution/test-results
 ```
 
-### 2. Create your first task
+### 2. Create a task
 
+Copy and edit the example:
 ```bash
-cat > evolution/tasks/task-001.json << 'EOF'
-{
-  "task_id": "task-001",
-  "status": "pending",
-  "priority": "medium",
-  "goal": "Build a CLI tool that converts CSV to JSON",
-  "created_at": "2026-01-01T00:00:00Z",
-  "updated_at": "2026-01-01T00:00:00Z",
-  "current_iteration": 0,
-  "max_iterations": 10,
-  "assigned_to": "iron",
-  "context": {
-    "background": "We need a simple CSV→JSON converter",
-    "constraints": ["Node.js only", "No external dependencies"],
-    "reference_files": [],
-    "subtasks": [
-      "Create core parser module",
-      "Add CLI argument handling",
-      "Write unit tests",
-      "Add error handling for malformed CSV"
-    ]
-  },
-  "review": null,
-  "result": null,
-  "history": []
-}
-EOF
+cp skills/auto-evolution/references/task-example.json evolution/tasks/task-001.json
 ```
 
-### 3. Configure cron heartbeats
+### 3. Configure the coordinator heartbeat
 
+**Option A: Via HEARTBEAT.md** (recommended — runs in your main agent's heartbeat loop)
+
+Add to your agent's `HEARTBEAT.md`:
+```markdown
+## Evolution Loop
+1. Run `node skills/auto-evolution/scripts/heartbeat-coordinator.js`
+2. If a pending task is found, spawn a reviewer sub-agent with the output prompt
+3. Apply the review result, then spawn an executor sub-agent
+4. Apply the execution result
+5. Repeat next heartbeat
+```
+
+**Option B: Via cron** (standalone)
 ```bash
-# Coordinator heartbeat (every 3-5 min)
-openclaw cron add --agent <coordinator-agent> \
+openclaw cron add --agent <your-agent> \
   --name "evolution-coordinator" \
   --every 5m \
-  --model "<your-model>" \
   --session isolated \
   --timeout-seconds 300 \
-  --message "Evolution heartbeat: scan pending tasks, spawn reviewer."
-
-# Executor heartbeat (every 3-5 min)
-openclaw cron add --agent <executor-agent> \
-  --name "evolution-executor" \
-  --every 5m \
-  --model "<your-model>" \
-  --session isolated \
-  --timeout-seconds 600 \
-  --message "Evolution heartbeat: scan reviewed tasks, execute next subtask."
-
-# Monitor heartbeat (every 10 min)
-openclaw cron add --agent <monitor-agent> \
-  --name "evolution-monitor" \
-  --every 10m \
-  --model "<your-model>" \
-  --session isolated \
-  --timeout-seconds 120 \
-  --message "Evolution monitor: detect stuck tasks, clean locks, report anomalies."
+  --message "Evolution heartbeat: scan pending tasks, spawn reviewer sub-agent."
 ```
 
-### 4. Environment variables (optional)
-
-Scripts auto-detect workspace location. Override with:
+### 4. (Optional) Configure the monitor
 
 ```bash
-export OPENCLAW_WORKSPACE=/path/to/your/workspace
+openclaw cron add --agent <any-agent> \
+  --name "evolution-monitor" \
+  --every 10m \
+  --session isolated \
+  --timeout-seconds 120 \
+  --message "Run: node skills/auto-evolution/scripts/monitor.js"
+```
+
+### 5. Environment variables (optional)
+
+Scripts auto-detect workspace. Override with:
+```bash
+export OPENCLAW_WORKSPACE=/path/to/workspace
 export EVOLUTION_TASKS_DIR=/path/to/tasks
-export EVOLUTION_SKILLS_DIR=/path/to/skills
-export EVOLUTION_ARCHIVE_DIR=/path/to/archive
 ```
 
 ---
 
 ## How It Works
 
+### Flow
+
+```
+Coordinator heartbeat fires
+  → finds pending task
+  → spawns Reviewer sub-agent → gets review + instructions
+  → spawns Executor sub-agent → executes one subtask
+  → updates task → back to pending (next subtask)
+  → all subtasks done → completed → auto-packaged
+```
+
 ### State Machine
 
 ```
 pending → reviewing → reviewed → executing → pending (next subtask)
-                                           → completed (all subtasks done)
-                                           → packaged (auto-packaged as skill)
+                                            → completed (all done)
+                                            → packaged ✅
 ```
 
-Each heartbeat cycle:
-1. **Coordinator** finds a `pending` task → spawns **Reviewer**
-2. **Reviewer** audits the plan, generates execution instructions → `reviewed`
-3. **Executor** picks up `reviewed` task → executes one subtask → back to `pending`
-4. Repeat until all subtasks complete → `completed`
-5. **Pack script** archives completed tasks and generates skill output
+### Key Rules
 
-### Key Rule
-
-Only mark `completed` when `history.length >= subtasks.length`. Each iteration handles exactly one subtask.
-
-### Monitor
-
-Runs every 10 minutes:
-- Tasks stuck in `reviewing`/`executing` > 10 min → auto-reset to `pending`
-- Orphaned `.lock` files → cleaned
-- 3+ consecutive failures → flagged for manual intervention
+- **One subtask per iteration** — keeps cycles fast and reviewable
+- **Only mark `completed` when `history.length >= subtasks.length`**
+- If reviewer API fails → wait and retry next heartbeat (never skip review)
+- Monitor auto-resets tasks stuck > 10 minutes
 
 ---
 
 ## Task File Format
 
+See `references/task-example.json` for a complete example.
+
+Required fields:
 ```json
 {
   "task_id": "task-001",
   "status": "pending",
-  "priority": "medium",
-  "goal": "Task objective",
-  "created_at": "ISO-8601",
-  "updated_at": "ISO-8601",
+  "goal": "What to build",
   "current_iteration": 0,
   "max_iterations": 10,
-  "assigned_to": "agent-name",
   "context": {
-    "background": "Why this task exists",
-    "constraints": ["Constraint 1"],
-    "reference_files": ["/path/to/relevant/file"],
     "subtasks": ["Step 1", "Step 2", "Step 3"]
-  },
-  "review": {
-    "verdict": "approve|revise|complete",
-    "feedback": "Review comments",
-    "next_instructions": {
-      "summary": "What to do next",
-      "current_step": 1,
-      "total_steps": 3,
-      "step": { "action": "...", "detail": "..." },
-      "acceptance_criteria": ["Criterion 1"]
-    }
-  },
-  "result": {
-    "subtask_completed": 1,
-    "summary": "What was done",
-    "files_changed": []
   },
   "history": []
 }
@@ -197,28 +151,31 @@ Runs every 10 minutes:
 
 ---
 
-## Troubleshooting
+## CLI Usage
 
-**Task stuck in executing:**
 ```bash
-# Reset to pending
-python3 -c "
-import json; d = json.load(open('evolution/tasks/task-001.json'))
-d['status'] = 'pending'; json.dump(d, open('evolution/tasks/task-001.json','w'), indent=2)
-"
-rm evolution/tasks/*.lock
+# Scan tasks and output prompts
+node scripts/heartbeat-coordinator.js
+
+# Apply review result to a task
+node scripts/heartbeat-coordinator.js apply-review task-001.json review-output.txt
+
+# Apply execution result to a task
+node scripts/heartbeat-coordinator.js apply-result task-001.json exec-output.txt
+
+# Run monitor check
+node scripts/monitor.js
+
+# Package completed tasks
+node scripts/pack-skill.js
 ```
-
-**Reviewer not triggering:** Check cron is running: `openclaw cron list`
-
-**Executor timeout:** Ensure subtasks are small enough for one iteration. Increase timeout if needed.
 
 ---
 
 ## Design Philosophy
 
-- **One subtask per iteration** — keeps each cycle fast and reviewable
-- **No quality degradation** — if reviewer API fails, wait and retry; never skip review
-- **Cost-efficient** — expensive models only for design/review; cheap models for execution
-- **Self-healing** — monitor detects and fixes stuck states automatically
-- **Composable** — swap any model or agent; the protocol is model-agnostic
+- **Coordinator-driven** — one agent runs the loop, spawns sub-agents as needed
+- **Model-agnostic** — swap any model for any role; the protocol doesn't care
+- **One subtask per tick** — predictable, won't timeout, easy to review
+- **Self-healing** — monitor detects stuck tasks and auto-resets
+- **No quality shortcuts** — reviewer down? Wait. Never skip the gate.
