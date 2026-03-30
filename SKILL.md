@@ -1,12 +1,12 @@
 ---
 name: auto-evolution
-description: "Multi-agent auto-evolution system — orchestrate review-execute-audit loops with 4 roles (Coordinator, Reviewer, Executor, Auditor). A single coordinator agent drives the loop by spawning sub-agents for review, execution, and audit. Break goals into subtasks, auto-iterate with dual quality gates, and auto-package results. Use when: user wants autonomous task execution with built-in quality assurance."
+description: "Multi-agent auto-evolution system with hybrid mode — orchestrate review-execute-audit loops with 4 roles (Coordinator, Reviewer, Executor, Auditor). Supports manual subtasks (simple tasks) and automatic subtask generation via Reviewer (complex tasks). A single coordinator agent drives the loop by spawning sub-agents. Break goals into subtasks, auto-iterate with dual quality gates, and auto-package results. Use when: user wants autonomous task execution with built-in quality assurance."
 ---
 
 # auto-evolution
 
 **Category:** Agent Orchestration / Meta-Skill
-**Version:** 0.6.0
+**Version:** 0.7.0
 
 ---
 
@@ -21,9 +21,9 @@ This is a **meta-skill**: it doesn't handle business logic. It orchestrates the 
 | Role | Responsibility | When Spawned | Recommended Model |
 |------|---------------|--------------|-------------------|
 | **Coordinator** | Drives the loop, updates task state, spawns sub-agents | Always (heartbeat/cron) | Any (cost-efficient) |
-| **Reviewer** | Pre-execution review, generates detailed instructions | Before each subtask | Strong (Sonnet/GPT-4o) |
-| **Executor** | Implements one subtask, runs verification | After review approves | Cost-effective (Qwen/Haiku) |
-| **Auditor** | Post-execution audit, decides pass/retry | After execution completes | Strong (Sonnet/GPT-4o) |
+| **Reviewer** | Pre-execution review, generates detailed subtasks | Complex tasks only | Strong (Sonnet/GPT-5.4) |
+| **Executor** | Implements one subtask, runs verification | After review approves | Cost-effective (Qwen3.5-Plus) |
+| **Auditor** | Post-execution audit, decides pass/retry | After execution completes | Strong (Sonnet/GPT-5.4) |
 
 **Why 4 roles?**
 - Reviewer and Auditor are **both quality gates** but serve different purposes
@@ -32,6 +32,38 @@ This is a **meta-skill**: it doesn't handle business logic. It orchestrates the 
 - Executor is pure labor — follows instructions, no judgment needed
 
 **Cost control:** Only Reviewer and Auditor need strong models. Coordinator and Executor can use cheap models.
+
+---
+
+## 🔄 Hybrid Mode (v2.0)
+
+**Task Complexity Assessment (5 dimensions, 1-5 points each):**
+
+| Dimension | 1 point | 3 points | 5 points |
+|-----------|---------|----------|----------|
+| **Code Lines** | <100 | 200-500 | >1000 |
+| **Files** | 1-2 | 5-10 | >20 |
+| **Risk** | Docs/Test | Feature improvement | Architecture change |
+| **Dependencies** | None | 3-5 | Cross-system |
+| **Innovation** | Routine fix | Feature enhancement | New feature |
+
+**Task Classification:**
+
+| Total Score | Task Type | Subtask Mode | Flow |
+|-------------|-----------|--------------|------|
+| **5-10** | Simple | Manual | Executor only |
+| **11-17** | Medium | Manual (recommended) or Auto | Optional Reviewer |
+| **18-25** | Complex | Auto (required) | Reviewer → Executor → Auditor |
+
+**Usage:**
+
+```bash
+# Create task (interactive)
+node scripts/create-task.js
+
+# Start Reviewer (complex tasks only)
+node scripts/start-reviewer.js <task-id>
+```
 
 ---
 
@@ -96,7 +128,24 @@ openclaw cron add --agent <any-agent> \
   --message "Run: node skills/auto-evolution/scripts/monitor.js"
 ```
 
-### 5. Environment variables (optional)
+### 5. Configure models (optional)
+
+Edit `evolution/config/models.json` to customize which models are used for each role:
+
+```json
+{
+  "roles": {
+    "reviewer": "google/gemini-3.1-pro",
+    "executor": "aiberm/gpt-5.4",
+    "auditor": "google/gemini-3.1-pro",
+    "coordinator": "bailian/qwen3.5-plus"
+  }
+}
+```
+
+**Default:** Scripts read from this config file. No environment variables needed.
+
+### 6. Environment variables (optional)
 
 ```bash
 export OPENCLAW_WORKSPACE=/path/to/workspace
